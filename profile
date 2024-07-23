@@ -1,0 +1,11 @@
+CPU_TYPE=$(uname -m)
+export PATH=$STATIC_GET_HOME/$CPU_TYPE/bottom/0.9.6/bin/:$PATH
+export PATH=$STATIC_GET_HOME/$CPU_TYPE/curl/8.8.0/bin/:$PATH
+export PATH=$STATIC_GET_HOME/$CPU_TYPE/fd/10.1.0/bin/:$PATH
+export PATH=$STATIC_GET_HOME/$CPU_TYPE/fish/3.7.1/bin/:$PATH
+export PATH=$STATIC_GET_HOME/$CPU_TYPE/htop/3.3.0/bin/:$PATH
+export PATH=$STATIC_GET_HOME/$CPU_TYPE/ncdu/2.4/bin/:$PATH
+export PATH=$STATIC_GET_HOME/$CPU_TYPE/ripgrep/14.1.0/bin/:$PATH
+export PATH=$STATIC_GET_HOME/$CPU_TYPE/rust/1.79.0/bin/:$PATH
+export PATH=$STATIC_GET_HOME/$CPU_TYPE/tmux/3.4/bin/:$PATH
+export PATH=$STATIC_GET_HOME/$CPU_TYPE/zellij/0.40.1/bin/:$PATH
