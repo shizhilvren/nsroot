@@ -16,6 +16,7 @@ export PATH=$STATIC_GET_HOME/$CPU_TYPE/fish/3.7.1/share/fish/man/man1/bind.1:$PA
 export PATH=$STATIC_GET_HOME/$CPU_TYPE/fish/3.7.1/share/fish/man/man1/fish_default_key_bindings.1:$PATH
 export PATH=$STATIC_GET_HOME/$CPU_TYPE/fish/3.7.1/share/fish/man/man1/fish_vi_key_bindings.1:$PATH
 export PATH=$STATIC_GET_HOME/$CPU_TYPE/fish/3.7.1/share/fish/tools/web_config/partials/bindings.html:$PATH
+export PATH=$STATIC_GET_HOME/$CPU_TYPE/git/2.45.2/bin/:$PATH
 export PATH=$STATIC_GET_HOME/$CPU_TYPE/htop/3.3.0/bin/:$PATH
 export PATH=$STATIC_GET_HOME/$CPU_TYPE/lsd/1.1.2/bin/:$PATH
 export PATH=$STATIC_GET_HOME/$CPU_TYPE/ncdu/2.4/bin/:$PATH
