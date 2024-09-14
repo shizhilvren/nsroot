@@ -1,10 +1,12 @@
 use clap::{arg, command, value_parser, Arg, ArgAction, ArgMatches, Command, Parser};
-use log::{debug, info};
+use log::{debug, info, log};
 use nix::mount::{mount, MsFlags};
 use nix::sched::{unshare, CloneFlags};
 use nix::sys::signal::{kill, Signal};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{self, fork, ForkResult};
+use std::borrow::BorrowMut;
+use std::collections::{hash_set, HashMap};
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
@@ -233,43 +235,10 @@ fn wait_for_child(rootdir: &Path, child_pid: unistd::Pid) -> ! {
     process::exit(exit_status);
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Debug, Clone)]
 struct Bind {
     src: PathBuf,
-    dist: Option<PathBuf>,
-}
-
-impl From<Vec<&str>> for Bind {
-    fn from(item: Vec<&str>) -> Self {
-        Bind {
-            src: PathBuf::from(item.get(0).expect("can not get bind src")),
-            dist: Some(PathBuf::from(item.get(0).expect("can not get bind src"))),
-        }
-    }
-}
-
-impl clap::builder::ValueParserFactory for Bind {
-    type Parser = BindValueParser;
-    fn value_parser() -> Self::Parser {
-        BindValueParser
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct BindValueParser;
-impl clap::builder::TypedValueParser for Bind {
-    type Value = Bind;
-
-    fn parse_ref(
-        &self,
-        cmd: &clap::Command,
-        arg: Option<&clap::Arg>,
-        value: &std::ffi::OsStr,
-    ) -> Result<Self::Value, clap::Error> {
-        let inner = clap::value_parser!(u32);
-        let val = inner.parse_ref(cmd, arg, value)?;
-        Ok(vec!["a", "b"].into())
-    }
+    dist: PathBuf,
 }
 
 #[derive(Parser, Debug)]
@@ -280,40 +249,141 @@ struct Args {
     rootfs: PathBuf,
 
     ///  Make the content of path accessible in the guest rootfs. Format is '*host_path*:*guest_location*'
-    #[arg(short, long, num_args=(2))]
+    #[arg(short, long, num_args = 2)]
     bind: Vec<PathBuf>,
+
+    /// command will run in this path, this path must be exist
+    #[arg(short = 'C', long, default_value = "/")]
+    cwd: PathBuf,
+
+    /// command which will run after chroot
+    #[arg(short, long, required=true, num_args = 1.., allow_hyphen_values=true)]
+    cmd: Vec<String>,
 }
 
-fn handle_args() -> () {
+#[derive(Debug)]
+struct Chroot {
+    rootdir: PathBuf,
+    bind_set: BindUnique,
+}
+
+impl Chroot {
+    fn run_chroot(self: Self, cmd: &str, args: &[String]) {
+        let cwd = env::current_dir().expect("cannot get current working directory");
+        let cwd = PathBuf::from("/");
+
+        let uid = unistd::getuid();
+        let gid = unistd::getgid();
+
+        unshare(CloneFlags::CLONE_NEWNS | CloneFlags::CLONE_NEWUSER).expect("unshare failed");
+
+        let nixdir = PathBuf::from("/home/shizhilvren/nsroot");
+        // mount the store
+        let nix_mount = self.rootdir.join("nix");
+        // fs::create_dir(&nix_mount)
+        //     .unwrap_or_else(|err| panic!("failed to create {}: {}", &nix_mount.display(), err));
+        mount(
+            Some(&nixdir),
+            &nix_mount,
+            Some("none"),
+            MsFlags::MS_BIND | MsFlags::MS_REC,
+            NONE,
+        )
+        .unwrap_or_else(|err| panic!("failed to bind mount {} to /nix: {}", nixdir.display(), err));
+
+        // chroot
+        unistd::chroot(self.rootdir.as_path())
+            .unwrap_or_else(|err| panic!("chroot({}): {}", self.rootdir.display(), err));
+
+        env::set_current_dir("/").expect("cannot change directory to /");
+
+        // // fixes issue #1 where writing to /proc/self/gid_map fails
+        // // see user_namespaces(7) for more documentation
+        // if let Ok(mut file) = fs::File::create("/proc/self/setgroups") {
+        //     let _ = file.write_all(b"deny");
+        // }
+
+        // let mut uid_map =
+        //     fs::File::create("/proc/self/uid_map").expect("failed to open /proc/self/uid_map");
+        // uid_map
+        //     .write_all(format!("{} {} 1", uid, uid).as_bytes())
+        //     .expect("failed to write new uid mapping to /proc/self/uid_map");
+
+        // let mut gid_map =
+        //     fs::File::create("/proc/self/gid_map").expect("failed to open /proc/self/gid_map");
+        // gid_map
+        //     .write_all(format!("{} {} 1", gid, gid).as_bytes())
+        //     .expect("failed to write new gid mapping to /proc/self/gid_map");
+
+        // let args: [String] = [];
+        // restore cwd
+        env::set_current_dir(&cwd)
+            .unwrap_or_else(|_| panic!("cannot restore working directory {}", cwd.display()));
+
+        let err = process::Command::new(cmd)
+            .args(args)
+            .env("NIX_CONF_DIR", "/nix/etc/nix")
+            .exec();
+
+        eprintln!("failed to execute {}: {}", &cmd, err);
+        process::exit(1);
+    }
+}
+
+#[derive(Debug)]
+struct BindUnique {
+    bind_map: HashMap<PathBuf, PathBuf>,
+}
+
+impl BindUnique {
+    fn new(binds: &Vec<Bind>) -> BindUnique {
+        let mut ret = BindUnique {
+            bind_map: HashMap::new(),
+        };
+        binds.iter().for_each(|Bind { src, dist }| {
+            ret.bind_map
+                .borrow_mut()
+                .insert(dist.clone(), src.clone())
+                .inspect(|old_src| {
+                    panic!("Multiple bind {dist:?} from {old_src:?} to {src:?} ");
+                });
+        });
+        ret
+    }
+}
+
+fn handle_args() -> Args {
     let args = Args::parse();
     debug!("{:?}", &args);
-
-    // let matches = command!() // requires `cargo` feature
-    //     .arg(arg!([name] "Optional name to operate on"))
-    //     .arg(
-    //         Arg::new("rootfs")
-    //             .long("rootfs")
-    //             .short('r')
-    //             .help("Use path as the new guest root file-system.")
-    //             .default_value("/")
-    //             .value_parser(value_parser!(PathBuf)),
-    //     )
-    //     .arg(
-    //         Arg::new("bind")
-    //             .long("bind")
-    //             .short('b')
-    //             .help("Make the content of path accessible in the guest rootfs.")
-    //             .long_help(
-    //                 r"Make the content of path accessible in the guest rootfs. Format is '*host_path*:*guest_location*'",
-    //             ),
-    //     )
-    //     .get_matches();
-    return ();
+    return args;
 }
 fn main() {
     env_logger::init();
     let args_my = handle_args();
     debug!("{:?}", args_my);
+    let binds = args_my.bind.chunks_exact(2);
+    let binds = binds
+        .map(|v| {
+            let [src, dist] = v else {
+                panic!("bind is {:?}", v);
+            };
+            info!("{:?} -> {:?}", &src, &dist);
+            Bind {
+                src: src.clone(),
+                dist: dist.clone(),
+            }
+        })
+        .collect::<Vec<Bind>>();
+    debug!("{:?}", &binds);
+    let bind_set = BindUnique::new(&binds);
+    debug!("{:?}", &bind_set);
+    let chroot = Chroot {
+        rootdir: args_my.rootfs,
+        bind_set,
+    };
+    let cmd = args_my.cmd.get(0).expect("cmd not set");
+    let cmd_args: &[String] = &args_my.cmd[1..];
+    chroot.run_chroot(cmd, cmd_args);
     return;
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
