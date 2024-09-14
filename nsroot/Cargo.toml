@@ -12,5 +12,6 @@ nix = { version = "0.29.0", default-features = true, features = [
     "fs",
 ] }
 libc = "0.2.158"
-clap = { version = "4.5.16", features = ["cargo"] }
+clap = { version = "4.5.16", features = ["cargo", "derive"] }
 log = "*"
+env_logger = ">0.9.0"

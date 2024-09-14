@@ -1,4 +1,5 @@
-use clap::{arg, command, value_parser, Arg, ArgAction, ArgMatches, Command};
+use clap::{arg, command, value_parser, Arg, ArgAction, ArgMatches, Command, Parser};
+use log::{debug, info};
 use nix::mount::{mount, MsFlags};
 use nix::sched::{unshare, CloneFlags};
 use nix::sys::signal::{kill, Signal};
@@ -14,11 +15,8 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::string::String;
-use log::{debug, info};
 
 mod mkdtemp;
-
-
 
 const NONE: Option<&'static [u8]> = None;
 
@@ -235,32 +233,88 @@ fn wait_for_child(rootdir: &Path, child_pid: unistd::Pid) -> ! {
     process::exit(exit_status);
 }
 
-fn handle_args() -> ArgMatches {
-    let matches = command!() // requires `cargo` feature
-        .arg(arg!([name] "Optional name to operate on"))
-        .arg(
-            Arg::new("rootfs")
-                .long("rootfs")
-                .short('r')
-                .help("Use path as the new guest root file-system.")
-                .default_value("/")
-                .value_parser(value_parser!(PathBuf)),
-        )
-        .arg(
-            Arg::new("bind")
-                .long("bind")
-                .short('b')
-                .help("Make the content of path accessible in the guest rootfs.")
-                .long_help(
-                    r"Make the content of path accessible in the guest rootfs. Format is '*host_path*:*guest_location*'",
-                ),
-        )
-        .get_matches();
-    return matches;
+#[derive(Parser, Debug, Clone)]
+struct Bind {
+    src: PathBuf,
+    dist: Option<PathBuf>,
+}
+
+impl From<Vec<&str>> for Bind {
+    fn from(item: Vec<&str>) -> Self {
+        Bind {
+            src: PathBuf::from(item.get(0).expect("can not get bind src")),
+            dist: Some(PathBuf::from(item.get(0).expect("can not get bind src"))),
+        }
+    }
+}
+
+impl clap::builder::ValueParserFactory for Bind {
+    type Parser = BindValueParser;
+    fn value_parser() -> Self::Parser {
+        BindValueParser
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct BindValueParser;
+impl clap::builder::TypedValueParser for Bind {
+    type Value = Bind;
+
+    fn parse_ref(
+        &self,
+        cmd: &clap::Command,
+        arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        let inner = clap::value_parser!(u32);
+        let val = inner.parse_ref(cmd, arg, value)?;
+        Ok(vec!["a", "b"].into())
+    }
+}
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Use path as the new guest root file-system.
+    #[arg(short, long, default_value = "/")]
+    rootfs: PathBuf,
+
+    ///  Make the content of path accessible in the guest rootfs. Format is '*host_path*:*guest_location*'
+    #[arg(short, long, num_args=(2))]
+    bind: Vec<PathBuf>,
+}
+
+fn handle_args() -> () {
+    let args = Args::parse();
+    debug!("{:?}", &args);
+
+    // let matches = command!() // requires `cargo` feature
+    //     .arg(arg!([name] "Optional name to operate on"))
+    //     .arg(
+    //         Arg::new("rootfs")
+    //             .long("rootfs")
+    //             .short('r')
+    //             .help("Use path as the new guest root file-system.")
+    //             .default_value("/")
+    //             .value_parser(value_parser!(PathBuf)),
+    //     )
+    //     .arg(
+    //         Arg::new("bind")
+    //             .long("bind")
+    //             .short('b')
+    //             .help("Make the content of path accessible in the guest rootfs.")
+    //             .long_help(
+    //                 r"Make the content of path accessible in the guest rootfs. Format is '*host_path*:*guest_location*'",
+    //             ),
+    //     )
+    //     .get_matches();
+    return ();
 }
 fn main() {
+    env_logger::init();
     let args_my = handle_args();
-    debug!("{:?}",args_my);
+    debug!("{:?}", args_my);
+    return;
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
         eprintln!("Usage: {} <nixpath> <command>\n", args[0]);
