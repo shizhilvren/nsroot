@@ -1,3 +1,2 @@
-nsroot/target
-nsroot/target/*
-musl
+target
+target/*
