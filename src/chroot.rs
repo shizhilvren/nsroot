@@ -1,12 +1,13 @@
-use std::{env, os::unix::process::CommandExt, path::PathBuf, process};
+use std::{env, fs, os::unix::process::CommandExt, path::PathBuf, process};
 
+use log::{debug, error, warn};
 use nix::{
     mount::{mount, MsFlags},
     sched::{unshare, CloneFlags},
     unistd,
 };
 
-use crate::bind;
+use crate::bind::{self, Bind};
 
 const NONE: Option<&'static [u8]> = None;
 
@@ -17,7 +18,7 @@ pub struct Chroot {
 }
 
 impl Chroot {
-    pub fn run_chroot(self: Self, cmd: &str, args: &[String]) {
+    pub fn run_chroot(self: &Self, cmd: &str, args: &[String]) {
         let cwd = env::current_dir().expect("cannot get current working directory");
         let cwd = PathBuf::from("/");
 
@@ -25,21 +26,7 @@ impl Chroot {
         let gid = unistd::getgid();
 
         unshare(CloneFlags::CLONE_NEWNS | CloneFlags::CLONE_NEWUSER).expect("unshare failed");
-
-        let nixdir = PathBuf::from("/home/shizhilvren/nsroot");
-        // mount the store
-        let nix_mount = self.rootdir.join("nix");
-        // fs::create_dir(&nix_mount)
-        //     .unwrap_or_else(|err| panic!("failed to create {}: {}", &nix_mount.display(), err));
-        mount(
-            Some(&nixdir),
-            &nix_mount,
-            Some("none"),
-            MsFlags::MS_BIND | MsFlags::MS_REC,
-            NONE,
-        )
-        .unwrap_or_else(|err| panic!("failed to bind mount {} to /nix: {}", nixdir.display(), err));
-
+        self.bind_all();
         // chroot
         unistd::chroot(self.rootdir.as_path())
             .unwrap_or_else(|err| panic!("chroot({}): {}", self.rootdir.display(), err));
@@ -76,5 +63,47 @@ impl Chroot {
 
         eprintln!("failed to execute {}: {}", &cmd, err);
         process::exit(1);
+    }
+
+    pub fn bind_all(self: &Self) {
+        self.bind_set.bind_map.iter().for_each(|(dist, src)| {
+            self.bind(&Bind {
+                src: src.clone(),
+                dist: dist.clone(),
+            });
+        })
+    }
+    pub fn bind(self: &Self, bind: &Bind) {
+        let Bind { src, dist } = bind;
+        let bind_str = format!("bind host {} to guest {}", src.display(), dist.display());
+        debug!("{bind_str}");
+        if !bind.is_root_path() {
+            panic!("{bind_str}, but some path not have root");
+        }
+        let real_dist = self.rootdir.join(
+            dist.strip_prefix("/")
+                .expect(format!("dist {} not have root", dist.display()).as_str()),
+        );
+        debug!("real_dist : {real_dist:?}");
+        if !dist.as_path().exists() {
+            fs::create_dir_all(&real_dist).unwrap_or_else(|err| {
+                panic!("failed to create guest {} : {}", &dist.display(), err)
+            });
+        }
+        let real_dist_is_empty_dir = real_dist
+            .read_dir()
+            .and_then(|ref mut v| Ok(v.next().is_none()))
+            .map_or_else(|_| false, |v| v);
+        if !real_dist_is_empty_dir {
+            warn!("{bind_str}, but {} is not empty dir", dist.display());
+        }
+        mount(
+            Some(src),
+            &real_dist,
+            Some("none"),
+            MsFlags::MS_BIND | MsFlags::MS_REC,
+            NONE,
+        )
+        .unwrap_or_else(|err| panic!("failed to {bind_str} : {}", err));
     }
 }

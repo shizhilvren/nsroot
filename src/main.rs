@@ -284,7 +284,7 @@ fn main() {
     debug!("{:?}", &bind_set);
     let chroot = chroot::Chroot {
         rootdir: args_my.rootfs,
-        bind_set,
+        bind_set: bind_set,
     };
     let cmd = args_my.cmd.get(0).expect("cmd not set");
     let cmd_args: &[String] = &args_my.cmd[1..];
