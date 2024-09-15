@@ -1,3 +1,4 @@
+use bind::{Bind, BindUnique};
 use clap::{arg, command, value_parser, Arg, ArgAction, ArgMatches, Command, Parser};
 use log::{debug, info, log};
 use nix::mount::{mount, MsFlags};
@@ -17,7 +18,8 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::string::String;
-
+mod bind;
+mod chroot;
 mod mkdtemp;
 
 const NONE: Option<&'static [u8]> = None;
@@ -235,12 +237,6 @@ fn wait_for_child(rootdir: &Path, child_pid: unistd::Pid) -> ! {
     process::exit(exit_status);
 }
 
-#[derive(Debug, Clone)]
-struct Bind {
-    src: PathBuf,
-    dist: PathBuf,
-}
-
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -261,97 +257,6 @@ struct Args {
     cmd: Vec<String>,
 }
 
-#[derive(Debug)]
-struct Chroot {
-    rootdir: PathBuf,
-    bind_set: BindUnique,
-}
-
-impl Chroot {
-    fn run_chroot(self: Self, cmd: &str, args: &[String]) {
-        let cwd = env::current_dir().expect("cannot get current working directory");
-        let cwd = PathBuf::from("/");
-
-        let uid = unistd::getuid();
-        let gid = unistd::getgid();
-
-        unshare(CloneFlags::CLONE_NEWNS | CloneFlags::CLONE_NEWUSER).expect("unshare failed");
-
-        let nixdir = PathBuf::from("/home/shizhilvren/nsroot");
-        // mount the store
-        let nix_mount = self.rootdir.join("nix");
-        // fs::create_dir(&nix_mount)
-        //     .unwrap_or_else(|err| panic!("failed to create {}: {}", &nix_mount.display(), err));
-        mount(
-            Some(&nixdir),
-            &nix_mount,
-            Some("none"),
-            MsFlags::MS_BIND | MsFlags::MS_REC,
-            NONE,
-        )
-        .unwrap_or_else(|err| panic!("failed to bind mount {} to /nix: {}", nixdir.display(), err));
-
-        // chroot
-        unistd::chroot(self.rootdir.as_path())
-            .unwrap_or_else(|err| panic!("chroot({}): {}", self.rootdir.display(), err));
-
-        env::set_current_dir("/").expect("cannot change directory to /");
-
-        // // fixes issue #1 where writing to /proc/self/gid_map fails
-        // // see user_namespaces(7) for more documentation
-        // if let Ok(mut file) = fs::File::create("/proc/self/setgroups") {
-        //     let _ = file.write_all(b"deny");
-        // }
-
-        // let mut uid_map =
-        //     fs::File::create("/proc/self/uid_map").expect("failed to open /proc/self/uid_map");
-        // uid_map
-        //     .write_all(format!("{} {} 1", uid, uid).as_bytes())
-        //     .expect("failed to write new uid mapping to /proc/self/uid_map");
-
-        // let mut gid_map =
-        //     fs::File::create("/proc/self/gid_map").expect("failed to open /proc/self/gid_map");
-        // gid_map
-        //     .write_all(format!("{} {} 1", gid, gid).as_bytes())
-        //     .expect("failed to write new gid mapping to /proc/self/gid_map");
-
-        // let args: [String] = [];
-        // restore cwd
-        env::set_current_dir(&cwd)
-            .unwrap_or_else(|_| panic!("cannot restore working directory {}", cwd.display()));
-
-        let err = process::Command::new(cmd)
-            .args(args)
-            .env("NIX_CONF_DIR", "/nix/etc/nix")
-            .exec();
-
-        eprintln!("failed to execute {}: {}", &cmd, err);
-        process::exit(1);
-    }
-}
-
-#[derive(Debug)]
-struct BindUnique {
-    bind_map: HashMap<PathBuf, PathBuf>,
-}
-
-impl BindUnique {
-    fn new(binds: &Vec<Bind>) -> BindUnique {
-        let mut ret = BindUnique {
-            bind_map: HashMap::new(),
-        };
-        binds.iter().for_each(|Bind { src, dist }| {
-            ret.bind_map
-                .borrow_mut()
-                .insert(dist.clone(), src.clone())
-                .inspect(|old_src| {
-                    panic!("Multiple bind {dist:?} from {old_src:?} to {src:?} ");
-                });
-        });
-        ret
-    }
-}
-
 fn handle_args() -> Args {
     let args = Args::parse();
     debug!("{:?}", &args);
@@ -368,16 +273,16 @@ fn main() {
                 panic!("bind is {:?}", v);
             };
             info!("{:?} -> {:?}", &src, &dist);
-            Bind {
+            bind::Bind {
                 src: src.clone(),
                 dist: dist.clone(),
             }
         })
-        .collect::<Vec<Bind>>();
+        .collect::<Vec<bind::Bind>>();
     debug!("{:?}", &binds);
     let bind_set = BindUnique::new(&binds);
     debug!("{:?}", &bind_set);
-    let chroot = Chroot {
+    let chroot = chroot::Chroot {
         rootdir: args_my.rootfs,
         bind_set,
     };
